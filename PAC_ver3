@@ -1,0 +1,313 @@
+%% basic info
+% root info
+r1 = './structure.oebin';
+paths = {'./events/Acquisition_Board-100.Rhythm Data/TTL/timestamps.npy', ...
+         './events/Rhythm_FPGA-100.0/TTL_1/timestamps.npy', ...
+         './events/Acquisition_Board-101.Rhythm Data/TTL/timestamps.npy', ...
+         './events/Rhythm_FPGA-113.0/TTL_1/timestamps.npy'};
+output_csv = fullfile(pwd, 'CombinedData.csv'); % 출력 CSV 파일 경로
+
+% recording info
+rows = [1 2 3];
+stim_duration_sec = 2;
+fs = 2000;
+num_channels = 3; % 채널 수에 맞춰서 바꿔줘야 함.
+Phase_min=2; Phase_max=8; Phase_step=1;
+Amp_min=20; Amp_max=50; Amp_step=5;
+m_sec=1; dt=2; 
+epoch_duration = 14; % -4초에서 10초까지의 총 시간
+samples_per_epoch = epoch_duration * fs;
+time_range = linspace(-4, 10, samples_per_epoch);
+intervals = [find(time_range >= -4 & time_range < -2), ...
+             find(time_range >= -2 & time_range < 0), ...
+             find(time_range >= 0 & time_range <= 2), ...
+             find(time_range >= 8 & time_range <= 10)];
+pre = intervals(1);
+baseline_indices = intervals(2); % baseline을 interval 2로 설정
+stim = intervals(3);
+post = intervals(7);
+
+% PAC info
+options={'filter','wavelet'};
+Param=[Phase_min,Phase_max,Phase_step,Amp_min,Amp_max,Amp_step];
+options{end+1}='param';
+options{end+1}=Param;
+options{end+1}='plotless';
+options{end+1}='PAC3D';
+options{end+1}=[m_sec,dt];
+
+% 경로 추가
+addpath('C:\Users\BCI LAB\Desktop\KHJ\[ECOG]\[code]\analysis-tools-master\analysis-tools-master');
+
+%% 경로를 더블 쿼트로 묶기
+% 경로 디버깅
+disp(['oebin 파일 경로: ', r1]);
+disp(['경로 길이: ', num2str(length(r1))]);
+
+% 파일 존재 여부 확인
+if exist(r1, 'file') ~= 2
+    error('oebin 파일이 존재하지 않습니다: %s', r1);
+else
+    disp(['oebin 파일을 찾았습니다: ', r1]);
+end
+
+% 경로를 따옴표로 감싸기
+quoted_r1 = ['"', r1, '"'];
+
+
+%% 파일 존재 여부 확인
+% oebin 파일 읽기 테스트
+try
+    fid = fopen(r1, 'r');
+    if fid == -1
+        error('파일을 열 수 없습니다: %s', r1);
+    end
+    jsonContent = fread(fid, '*char')';
+    fclose(fid);
+    
+    jsonData = jsondecode(jsonContent);
+    disp('oebin 파일 읽기 성공');
+catch ME
+    disp('oebin 파일 읽는 중 오류 발생:');
+    disp(getReport(ME));
+    error('oebin 파일을 읽는 중 오류가 발생했습니다.');
+end
+
+for i = 1:length(paths)
+    if exist(paths{i}, 'file') ~= 2
+        disp(['경로에 NPY 파일이 존재하지 않습니다: ', paths{i}]);
+        paths{i} = ''; % 존재하지 않는 경로는 빈 문자열로 설정
+    else
+        disp(['NPY파일을 찾았습니다: ', paths{i}]);
+    end
+end
+%%
+jsonFilePath = 'C:\Users\BCI LAB\Desktop\KHJ\[ECOG]\data\1min_5+30\Record Node 115\experiment1\recording1\structure.oebin';
+
+try
+    disp(['Trying to read JSON file from: ', jsonFilePath]);
+    
+    % Check if the file exists
+    if exist(jsonFilePath, 'file') ~= 2
+        error('The JSON file does not exist: %s', jsonFilePath);
+    end
+    
+    % Read the file content
+    jsonContent = fileread(jsonFilePath);
+    
+    % Decode the JSON content
+    jsonData = jsondecode(jsonContent);
+    
+    disp('JSON 파일 읽기 성공');
+    disp(jsonData); % Display the JSON data for verification
+catch ME
+    disp('JSON 파일 읽는 중 오류 발생:');
+    disp(getReport(ME));
+end
+
+
+%% oebin to csv file 
+success = false;
+for i = 1:length(paths)
+    if isempty(paths{i})
+        continue; % 경로가 비어 있으면 건너뜀
+    end
+    try
+        oebi2csv(rows, stim_duration_sec, fs, r1, paths{i}, output_csv);
+        disp('oebi2csv 함수 실행 완료');
+        success = true;
+        break;
+    catch ME
+        if contains(ME.message, 'File not found:') && contains(ME.message, 'timestamps.npy')
+            disp(['timestamp.npy 파일을 찾을 수 없습니다. 다음 경로를 시도합니다: ', paths{i}]);
+        else
+            disp(getReport(ME)); % 오류 메시지 출력
+        end
+    end
+end
+
+if ~success
+    error('timestamp.npy 파일을 어느 경로에서도 찾을 수 없습니다.');
+end
+
+%% Preprocessing
+% load csv file as EEG
+EEG.etc.eeglabvers = '2023.1'; % this tracks which version of EEGLAB is being used, you may ignore it
+EEG = pop_importdata('dataformat', 'ascii', 'nbchan', 0, 'data', '.\CombinedData.csv', 'setname', '5+30', 'srate', 2000, 'pnts', 0, 'xmin', 0);
+EEG = pop_chanevent(EEG, num_channels + 1, 'edge', 'leading', 'edgelen', 0);
+disp('불러오기 완료');
+
+% Save original EEG data before filtering
+original_EEG = EEG;
+original_set_filename = '5+30.set';
+pop_saveset(original_EEG, 'filename', original_set_filename);
+disp('5+30');
+
+% Define filter parameters
+hp_cutoff = 0.5; % High-pass filter cutoff frequency
+lp_cutoff = 50; % Low-pass filter cutoff frequency
+
+% Filtering
+EEG.data = apply_filters(original_EEG.data, fs, hp_cutoff, lp_cutoff);
+filtered_EEG = EEG; % 필터링된 데이터를 저장
+disp('필터링 완료');
+
+% Plot power spectrum for channel 2
+plot_power_spectrum(filtered_EEG.data, fs, 2);
+disp('Power spectrum plotted');
+
+% check the FFT(1)
+FFT(EEG, fs);  % ALLEEG 구조체와 샘플링 주파수 2000Hz 사용
+disp('FFT 확인 완료');
+
+% SNR and re-filtering (SNR = signal to noise ratio)
+transition_bandwidth = 0.5; % 필요한 전이 대역폭 값 설정
+EEG = re_filtering_if_needed(original_EEG, filtered_EEG, fs, transition_bandwidth);
+
+% check the FFT(2)
+FFT(EEG, fs);  % ALLEEG 구조체와 샘플링 주파수 2000Hz 사용
+disp('FFT 확인 완료');
+
+% save the filtered data
+filtered_set_filename = '5+30+filtered.set';
+pop_saveset(EEG, 'filename', filtered_set_filename);
+disp('최종 필터링 데이터 저장 완료');
+
+% epoching
+EEG = pop_epoch(EEG, {  }, [-4  10], 'newname', '5+30 epochs', 'epochinfo', 'yes');
+epoch_set_filename = '5+30+filter+epoch.set';
+pop_saveset(EEG, 'filename', epoch_set_filename);
+
+% remove bad epoch
+remove_bad_all_epoch(EEG, fs)
+
+% power map
+plot_power_map(EEG, fs) %total\stim\pre\post
+
+%% First step: PAC MI
+% info
+num_epochs = size(EEG.epoch, 2);
+allData = struct();
+
+% calculate
+for channel = 1:num_channels % all channel
+    data_channel = EEG.data(channel, :, :);  % 현재 채널 데이터 추출
+    MI = [];
+    MI_out = [];
+    for i = 1:num_epochs
+        x = data_channel(1, :, i);
+        [tmp_a, tmp_b] = PAC_par(x,[],fs,[],options{:});
+        MI(:,:,i) = tmp_a;
+        MI_out = [MI_out; reshape(tmp_b, 1, [])];  % tmp_b를 1행으로 변환하여 추가
+        close all
+    end
+        allData(channel).MI = MI;
+        allData(channel).MI_out = MI_out;
+end
+
+% save the data 
+filename = 'first.mat';
+save(filename, 'allData', 'EEG', '-v7.3');
+
+%% Second step: Visualization - total graph
+% before start, you need to load the 'first.mat' file.
+for channel = 1:num_channels
+    MI = allData(channel).MI;
+    MI_out = allData(channel).MI_out;
+    if isempty(MI)
+        disp(['채널 ' num2str(channel) '에 대한 데이터가 없습니다.']);
+        continue; % MI가 비어있는 경우 이 채널 건너뜀
+    end
+    N_epochs = size(MI_out, 1);
+    MI_avg = mean(MI, 3); % 3차원을 따라 평균
+    num_time_points = size(MI_out(channel).MI3, 3);
+    MI_time = zeros(size(MI_out(channel).MI3));
+    for i = 1:num_time_points
+        tmp = zeros(size(MI_out(1).MI3(:, :, i)));
+        for j = 1:N_epochs
+            tmp = tmp + MI_out(j).MI3(:, :, i);
+        end
+        MI_time(:, :, i) = tmp / N_epochs;  % epoch 평균
+    end
+    figure;
+    sgtitle(sprintf('Channel %d - PAC Over Time', channel));
+    caxis_range = [min(MI_time(:)), max(MI_time(:))];  % 컬러바 범위 설정
+    for k = 1:num_time_points
+        subplot(2, 7, k);  % 각 시간 구간에 대한 서브플롯 배치
+        surf(2:1:8, 20:5:50, squeeze(MI_time(:, :, k)));
+        shading interp;
+        view(2);
+        caxis(caxis_range);  % 컬러바 범위 통일
+        colorbar;
+        title(sprintf('Interval %d', k));
+        xlabel('Phase Frequencies (Hz)');
+        ylabel('Amplitude Frequencies (Hz)');
+        axis square;
+    end
+    h = colorbar;
+    ylabel(h, 'Modulation Index');  % 컬러바 라벨 추가
+    save(sprintf('PAC_avg_channel_%d.mat', channel), 'num_channels', 'N_epochs', 'MI_avg', 'MI_time', '-v7.3');
+end
+
+%% Second step: Visualization - PAC change from baseline
+% before start, you need to load the 'first.mat' file.
+% total time, compared PAC
+interval_names = {'pre', 'stim', 'post'};
+interval_indices = {pre, stim, post};
+
+for channel = 1:num_channels
+    MI = allData(channel).MI;
+    MI_out = allData(channel).MI_out;
+    if isempty(MI)
+        disp(['채널 ' num2str(channel) '에 대한 데이터가 없습니다.']);
+        continue; % MI가 비어있는 경우 이 채널 건너뜀
+    end
+
+    N_epochs = size(MI_out, 1);
+    MI_time = zeros(size(MI_out(1).MI3)); % MI_time 초기화
+    
+    % Baseline PAC 값 계산 (interval 2 사용)
+    baseline_MI = zeros(size(MI_out(1).MI3(:,:,1)));
+    for j = 1:N_epochs
+        baseline_MI = baseline_MI + mean(MI_out(j).MI3(:, :, interval_indices{2}), 3);
+    end
+    baseline_MI = baseline_MI / N_epochs;
+    
+    % 각 구간(pre, stim, post) 동안의 PAC 값 계산 및 증감 비율 계산
+    for k = 1:length(interval_names)
+        interval_name = interval_names{k};
+        interval_idx = interval_indices{k};
+        
+        % 인덱스가 유효한지 확인
+        if any(interval_idx > size(MI_out(1).MI3, 3))
+            error('interval_indices가 MI_out 배열의 경계를 벗어났습니다.');
+        end
+        
+        % 구간 PAC 값 계산
+        interval_MI = zeros(size(MI_out(1).MI3(:, :, 1)));
+        for j = 1:N_epochs
+            interval_MI = interval_MI + mean(MI_out(j).MI3(:, :, interval_idx), 3);
+        end
+        interval_MI = interval_MI / N_epochs;
+        
+        % 증감 비율 계산
+        change_ratio = (interval_MI - baseline_MI) ./ baseline_MI;
+        
+        % 시각화
+        figure;
+        surf(2:1:8, 20:5:50, change_ratio);
+        shading interp;
+        view(2);
+        colorbar;
+        caxis([-1 1]);  % 컬러바 범위 설정
+        title(sprintf('Channel %d - Change Ratio - %s', channel, interval_name));
+        xlabel('Phase Frequencies (Hz)');
+        ylabel('Amplitude Frequencies (Hz)');
+        axis square;
+        h = colorbar;
+        ylabel(h, 'Change Ratio');
+        
+        % 결과 저장
+        saveas(gcf, sprintf('change_ratio_channel_%d_%s.png', channel, interval_name));
+    end
+end
